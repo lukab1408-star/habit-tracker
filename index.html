@@ -489,7 +489,9 @@ document.addEventListener("click",function(e){
 document.addEventListener("change",function(e){
   if(e.target.id==="e-cat")document.getElementById("e-newcat-l").style.display=e.target.value==="__new"?"":"none";
   if(e.target.id==="imp"&&e.target.files[0]){
-    var r=new FileReader();r.onload=function(){try{var d=JSON.parse(r.result);if(!d||!Array.isArray(d.habits))throw 0;d.cats=d.cats||[];d.habits.forEach(function(h){h.log=h.log||{};h.notes=h.notes||{};h.skips=h.skips||{};h.id=h.id||uid()});delete d.examples;state=d;ui.open=null;toast("Imported "+pl(d.habits.length,"habit"));change()}catch(_){toast("That file isn’t a habit backup. Choose a .json file exported from this app.")}};r.readAsText(e.target.files[0]);
+    var inp=e.target,r=new FileReader();r.onload=function(){try{var d=JSON.parse(r.result);
+      if(d&&Array.isArray(d.completions)&&Array.isArray(d.habits)&&d.formatVersion!=null){var res=fromHabitKit(d);toast("Imported "+pl(res.habits,"habit")+" and "+res.days+" completions from HabitKit");ui.open=null;change();inp.value="";return}
+      if(!d||!Array.isArray(d.habits))throw 0;d.cats=d.cats||[];d.habits.forEach(function(h){h.log=h.log||{};h.notes=h.notes||{};h.skips=h.skips||{};h.id=h.id||uid()});delete d.examples;state=d;ui.open=null;toast("Imported "+pl(d.habits.length,"habit"));change()}catch(_){toast("That file isn’t a habit backup. Choose a .json file exported from this app or from HabitKit.")}inp.value=""};r.readAsText(inp.files[0]);
   }
 });
 document.addEventListener("submit",function(e){
@@ -510,6 +512,42 @@ function doExport(){
   if(downloads){downloads.save({filename:name,data:data}).then(function(){toast("Backup saved")}).catch(function(){toast("Download cancelled")});return}
   try{var bl=new Blob([data],{type:"application/json"}),u=URL.createObjectURL(bl),a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},4000);toast("Backup downloaded");return}catch(_){}
   try{navigator.clipboard.writeText(data).then(function(){toast("Backup copied. Paste it into a .json file to keep it.")},function(){toast("Couldn’t copy the backup here.")})}catch(_){toast("Couldn’t copy the backup here.")}
+}
+
+/* ---------- HabitKit import ---------- */
+var HK_COLORS={red:"#e0563b",rose:"#e0468f",pink:"#e0468f",fuchsia:"#e0468f",orange:"#f07c1f",amber:"#d9a21b",yellow:"#d9a21b",lime:"#6b8e23",green:"#1f9d63",emerald:"#1f9d63",teal:"#13a3b5",cyan:"#13a3b5",sky:"#2f7de1",blue:"#2f7de1",indigo:"#2f7de1",violet:"#8a5cf6",purple:"#8a5cf6",gray:"#64748b",grey:"#64748b",slate:"#64748b",zinc:"#64748b",neutral:"#64748b",stone:"#64748b"};
+var HK_ICONS={activity:"🏃",dumbbell:"🏋️",bike:"🚴",footprints:"🚶",book:"📚","book-open":"📚",library:"📚",apple:"🍎",salad:"🥗",droplet:"💧","glass-water":"💧",droplets:"💧",moon:"😴",bed:"😴",sun:"☀️",brain:"🧠","graduation-cap":"🧠",pen:"✍️",pencil:"✍️",notebook:"✍️",music:"🎸",guitar:"🎸",palette:"🎨",brush:"🎨",laptop:"💻",code:"💻",monitor:"💻",pill:"💊",heart:"🧘","heart-pulse":"🧘",leaf:"🌱",sprout:"🌱",wallet:"💰","piggy-bank":"💰",coins:"💰","cigarette-off":"🚭","smartphone-off":"📵",sparkles:"🧹"};
+var NAME_ICONS=[[/gym|lift|weights?|strength/i,"🏋️"],[/run|jog|walk|workout/i,"🏃"],[/read|book|chapter/i,"📚"],[/stud|thesis|learn|course|project/i,"🧠"],[/writ|journal/i,"✍️"],[/meditat|yoga/i,"🧘"],[/water|drink/i,"💧"],[/sleep|bed/i,"😴"],[/code|program/i,"💻"],[/guitar|piano|music/i,"🎸"],[/draw|paint|art/i,"🎨"],[/smok/i,"🚭"]];
+function hkDay(iso,tz){var t=Date.parse(iso);if(isNaN(t))return null;var d=new Date(t+(tz||0)*60000);return d.getUTCFullYear()+"-"+pad(d.getUTCMonth()+1)+"-"+pad(d.getUTCDate())}
+function fromHabitKit(d){
+  if(state.examples)state={v:2,cats:[],habits:[]};
+  var cats={};(d.categories||[]).forEach(function(c){cats[c.id]=String(c.name||"").trim()});
+  var maps={};(d.categoryMappings||[]).slice().sort(function(a,b){return (a.orderIndex||0)-(b.orderIndex||0)||String(a.createdAt).localeCompare(String(b.createdAt))}).forEach(function(m){if(!maps[m.habitId]&&cats[m.categoryId])maps[m.habitId]=cats[m.categoryId]});
+  var ivs={};(d.intervals||[]).forEach(function(iv){var cur=ivs[iv.habitId];if(!cur||(!iv.endDate&&cur.endDate)||(String(iv.startDate)>String(cur.startDate)&&!!iv.endDate===!!cur.endDate))ivs[iv.habitId]=iv});
+  var byId={},added=0,days={};
+  d.habits.slice().sort(function(a,b){return (a.orderIndex||0)-(b.orderIndex||0)||String(a.createdAt).localeCompare(String(b.createdAt))}).forEach(function(x){
+    var ex=state.habits.filter(function(h){return h.src==="hk:"+x.id})[0];
+    var iv=ivs[x.id]||{},period=iv.type==="week"||iv.type==="month"?iv.type:"day";
+    var goal=period==="day"?(iv.requiredNumberOfCompletionsPerDay||1):(iv.requiredNumberOfCompletions||1);
+    var icon=x.emoji||HK_ICONS[x.icon];
+    if(!icon||x.icon==="activity"){for(var i=0;i<NAME_ICONS.length;i++)if(NAME_ICONS[i][0].test(x.name||"")){icon=NAME_ICONS[i][1];break}}
+    var cat=maps[x.id]||"";if(cat&&state.cats.indexOf(cat)<0)state.cats.push(cat);
+    var h=ex||{id:uid(),src:"hk:"+x.id,log:{},notes:{},skips:{}};
+    h.name=String(x.name||"Habit").trim();h.desc=x.description||"";h.icon=icon||ICONS[0];h.color=HK_COLORS[String(x.color||"").toLowerCase()]||(/^#/.test(x.color||"")?x.color:COLORS[0]);
+    h.cat=cat;h.period=period;h.goal=Math.max(1,goal);h.archived=!!x.archived;h.created=hkDay(x.createdAt,0)||key(today());
+    if(!ex){state.habits.push(h);added++}
+    byId[x.id]=h;
+  });
+  d.completions.forEach(function(c){
+    var h=byId[c.habitId];if(!h)return;var k=hkDay(c.date,c.timezoneOffsetInMinutes);if(!k)return;
+    var n=Math.max(0,Number(c.amountOfCompletions)||0);
+    if(!days[h.id+k]){days[h.id+k]=1;delete h.log[k]}
+    if(n>0)h.log[k]=(h.log[k]||0)+n;
+    if(c.note&&String(c.note).trim())h.notes[k]=String(c.note).trim();
+  });
+  Object.keys(byId).forEach(function(id){var h=byId[id],ks=Object.keys(h.log).sort();if(ks.length&&ks[0]<h.created)h.created=ks[0]});
+  var tot=0;Object.keys(byId).forEach(function(id){for(var k in byId[id].log)tot+=byId[id].log[k]});
+  return {habits:Object.keys(byId).length,days:tot};
 }
 
 /* ---------- start ---------- */
